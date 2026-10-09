@@ -24,8 +24,76 @@ import {
   Edit3,
   Sliders,
   Terminal,
+  BarChart3,
+  TrendingUp,
 } from 'lucide-react';
+import {
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  Tooltip as RechartsTooltip,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Legend as RechartsLegend,
+} from 'recharts';
 import initialVehicleData from './vehicle_v1.json';
+
+// Custom Cyber Tooltip for Donut Charts
+const CyberDonutTooltip = ({ active, payload, total, unit = 'items' }) => {
+  if (active && payload && payload.length) {
+    const data = payload[0];
+    const val = data.value || 0;
+    const pct = total > 0 ? ((val / total) * 100).toFixed(1) : '0.0';
+    const color = data.payload?.color || data.color || '#38bdf8';
+    return (
+      <div className="chart-tooltip-box">
+        <div className="chart-tooltip-header" style={{ color }}>
+          <span className="chart-tooltip-dot" style={{ backgroundColor: color }} />
+          <span>{data.name}</span>
+        </div>
+        <div className="chart-tooltip-value">
+          <span>Count: <strong>{val}</strong> {unit}</span>
+          <span className="chart-tooltip-pct">({pct}%)</span>
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
+// Custom Cyber Tooltip for Comparison Bar Chart
+const CyberBarTooltip = ({ active, payload, label }) => {
+  if (active && payload && payload.length) {
+    const v1Item = payload.find((p) => p.dataKey === 'v1');
+    const v2Item = payload.find((p) => p.dataKey === 'v2');
+    const v1Val = v1Item?.value || 0;
+    const v2Val = v2Item?.value || 0;
+    const delta = v2Val - v1Val;
+    return (
+      <div className="chart-tooltip-box">
+        <div style={{ fontWeight: 700, color: '#f8fafc', marginBottom: 6, fontSize: 12 }}>
+          {label} Comparison
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, fontFamily: 'monospace' }}>
+          <div style={{ color: '#38bdf8' }}>
+            V1 Baseline: <strong>{v1Val}</strong>
+          </div>
+          <div style={{ color: '#10b981' }}>
+            V2 Target: <strong>{v2Val}</strong>
+          </div>
+          <div style={{ color: delta > 0 ? '#34d399' : delta < 0 ? '#f87171' : '#94a3b8', fontWeight: 700 }}>
+            Delta: {delta > 0 ? `+${delta}` : delta} {delta === 0 ? '(No Change)' : ''}
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
 
 const DEFAULT_API_URL = 'http://127.0.0.1:8001';
 const API_BASE_URL =
@@ -409,6 +477,164 @@ export default function App() {
     return Array.from(new Set(sourceList.map((f) => f.stride_category)));
   }, [diffResult, data]);
 
+  // Active architecture analysis dataset (reactively tracks V2 target when modified, falls back to data)
+  const activeAnalysis = diffResult?.v2_analysis || data;
+
+  // 1. Data-Driven Threat Severity Distribution
+  const severityChartData = useMemo(() => {
+    const findings = activeAnalysis?.security_findings || [];
+    const total = findings.length;
+    const counts = { Critical: 0, High: 0, Medium: 0, Low: 0 };
+    findings.forEach((f) => {
+      const lvl = (f.risk_level || '').toUpperCase();
+      if (lvl === 'CRITICAL') counts.Critical++;
+      else if (lvl === 'HIGH') counts.High++;
+      else if (lvl === 'MEDIUM') counts.Medium++;
+      else if (lvl === 'LOW') counts.Low++;
+    });
+    const items = [
+      { name: 'Critical', value: counts.Critical, color: '#ef4444' },
+      { name: 'High', value: counts.High, color: '#f97316' },
+      { name: 'Medium', value: counts.Medium, color: '#eab308' },
+      { name: 'Low', value: counts.Low, color: '#10b981' },
+    ];
+    return {
+      chartData: items.filter((d) => d.value > 0),
+      allRows: items,
+      total,
+      counts,
+    };
+  }, [activeAnalysis]);
+
+  // 2. Data-Driven STRIDE Threat Distribution
+  const strideChartData = useMemo(() => {
+    const threats = activeAnalysis?.threats || [];
+    const total = threats.length;
+    const strideOrder = [
+      { name: 'Spoofing', color: '#38bdf8' },
+      { name: 'Tampering', color: '#f43f5e' },
+      { name: 'Repudiation', color: '#a855f7' },
+      { name: 'Information Disclosure', color: '#3b82f6' },
+      { name: 'Denial of Service', color: '#f59e0b' },
+      { name: 'Elevation of Privilege', color: '#ec4899' },
+    ];
+    const countMap = {};
+    strideOrder.forEach((s) => {
+      countMap[s.name] = 0;
+    });
+    threats.forEach((t) => {
+      const cat = t.stride_category;
+      if (countMap[cat] !== undefined) {
+        countMap[cat]++;
+      } else if (cat) {
+        countMap[cat] = 1;
+      }
+    });
+    const allRows = strideOrder.map((s) => ({
+      name: s.name,
+      value: countMap[s.name] || 0,
+      color: s.color,
+    }));
+    return {
+      chartData: allRows.filter((d) => d.value > 0),
+      allRows,
+      total,
+    };
+  }, [activeAnalysis]);
+
+  // 3. Data-Driven Interface Protocol & Surface Exposure Distribution
+  const interfaceChartData = useMemo(() => {
+    const ifaces = activeAnalysis?.interfaces || [];
+    const surfaces = activeAnalysis?.attack_surfaces || [];
+    const totalIfaces = ifaces.length;
+    const totalSurfaces = surfaces.length;
+
+    const protocolOrder = [
+      { name: 'CAN', color: '#06b6d4' },
+      { name: 'Ethernet', color: '#3b82f6' },
+      { name: 'Bluetooth', color: '#8b5cf6' },
+      { name: 'Wi-Fi', color: '#10b981' },
+      { name: 'Diagnostic', color: '#f59e0b' },
+    ];
+    const protoCount = {};
+    protocolOrder.forEach((p) => {
+      protoCount[p.name] = 0;
+    });
+    ifaces.forEach((i) => {
+      const p = i.protocol;
+      if (protoCount[p] !== undefined) {
+        protoCount[p]++;
+      } else if (p) {
+        protoCount[p] = (protoCount[p] || 0) + 1;
+      }
+    });
+
+    // Attack Surface Type Breakdown
+    const surfaceTypeCounts = {};
+    surfaces.forEach((s) => {
+      const t = s.type || 'Unknown';
+      surfaceTypeCounts[t] = (surfaceTypeCounts[t] || 0) + 1;
+    });
+
+    const allRows = protocolOrder.map((p) => ({
+      name: p.name,
+      value: protoCount[p.name] || 0,
+      color: p.color,
+    }));
+    return {
+      chartData: allRows.filter((d) => d.value > 0),
+      allRows,
+      totalIfaces,
+      totalSurfaces,
+      surfaceTypeCounts,
+    };
+  }, [activeAnalysis]);
+
+  // 4. Data-Driven V1 Baseline vs V2 Target Delta Comparison
+  const comparisonChartData = useMemo(() => {
+    const v1 = diffResult?.v1_summary || {
+      components_count: data?.components?.length || 4,
+      interfaces_count: data?.interfaces?.length || 4,
+      attack_surfaces_count: data?.attack_surfaces?.length || 4,
+      threats_count: data?.threats?.length || 13,
+      findings_count: data?.security_findings?.length || 13,
+    };
+    const v2 = diffResult?.v2_summary || v1;
+    const items = [
+      {
+        metric: 'Interfaces',
+        v1: v1.interfaces_count,
+        v2: v2.interfaces_count,
+        delta: v2.interfaces_count - v1.interfaces_count,
+      },
+      {
+        metric: 'Surfaces',
+        v1: v1.attack_surfaces_count,
+        v2: v2.attack_surfaces_count,
+        delta: v2.attack_surfaces_count - v1.attack_surfaces_count,
+      },
+      {
+        metric: 'STRIDE Threats',
+        v1: v1.threats_count,
+        v2: v2.threats_count,
+        delta: v2.threats_count - v1.threats_count,
+      },
+      {
+        metric: 'Findings',
+        v1: v1.findings_count,
+        v2: v2.findings_count,
+        delta: v2.findings_count - v1.findings_count,
+      },
+    ];
+    const totalDelta = items.reduce((acc, curr) => acc + Math.abs(curr.delta), 0);
+    return {
+      data: items,
+      hasDelta: totalDelta > 0,
+      v1,
+      v2,
+    };
+  }, [diffResult, data]);
+
   // Merge backend test revalidation statuses with genuine execution results
   // CRITICAL: A test that requires revalidation CANNOT continue to appear as PASSED!
   const combinedSecurityTests = useMemo(() => {
@@ -551,6 +777,11 @@ export default function App() {
               <span className="system-pill-val">{v1Baseline.system}</span>
             </div>
 
+            <div className="sim-pill" title="Execution model is simulated; no physical vehicle hardware connected">
+              <Cpu style={{ width: 12, height: 12, color: 'var(--accent-cyan)' }} />
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#38bdf8' }}>SIMULATED MODEL</span>
+            </div>
+
             <div className="health-pill">
               <span
                 className={`health-dot ${
@@ -613,6 +844,13 @@ export default function App() {
               className={`nav-tab-item ${activeTab === 'all' ? 'active' : ''}`}
             >
               All Sections
+            </button>
+            <button
+              onClick={() => setActiveTab('analytics')}
+              className={`nav-tab-item ${activeTab === 'analytics' ? 'active' : ''}`}
+            >
+              <BarChart3 style={{ width: 14, height: 14, display: 'inline', marginRight: 6 }} />
+              Security Analytics & Charts
             </button>
             <button
               onClick={() => setActiveTab('comparison')}
@@ -826,6 +1064,376 @@ export default function App() {
                 </div>
               </div>
             </section>
+
+            {/* SECTION: CYBERSECURITY ANALYTICS & DATA-DRIVEN CHARTS */}
+            {(activeTab === 'all' || activeTab === 'analytics') && (
+              <section className="dashboard-section analytics-section">
+                <div className="section-head">
+                  <div className="section-title-wrap">
+                    <div className="section-icon-box cyan">
+                      <BarChart3 style={{ width: 18, height: 18 }} />
+                    </div>
+                    <div>
+                      <h2 className="section-title">Cybersecurity Analytics & Threat Visualizations</h2>
+                      <div className="section-desc">
+                        Real-time quantitative distribution charts derived from active architecture security analysis
+                      </div>
+                    </div>
+                  </div>
+                  <div className="sim-pill" title="Execution model is simulated; no physical vehicle bus connected">
+                    <Cpu style={{ width: 13, height: 13, color: 'var(--accent-cyan)' }} />
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#38bdf8' }}>SIMULATED ENGINE MODEL</span>
+                  </div>
+                </div>
+
+                <div className="analytics-grid">
+                  {/* Chart 1: Threat Severity Distribution */}
+                  <div className="analytics-card">
+                    <div className="analytics-card-head">
+                      <div className="analytics-card-title-wrap">
+                        <div className="analytics-icon-badge rose">
+                          <ShieldAlert style={{ width: 16, height: 16 }} />
+                        </div>
+                        <div>
+                          <div className="analytics-card-title">Threat Severity Distribution</div>
+                          <div className="analytics-card-sub">Quantitative breakdown by calculated risk level</div>
+                        </div>
+                      </div>
+                      <span className="analytics-metric-badge badge-critical">
+                        {severityChartData.total} Findings Total
+                      </span>
+                    </div>
+
+                    <div className="chart-content-row">
+                      <div className="donut-chart-container">
+                        <ResponsiveContainer width="100%" height={170}>
+                          <PieChart>
+                            <Pie
+                              data={severityChartData.chartData}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={50}
+                              outerRadius={75}
+                              paddingAngle={4}
+                              dataKey="value"
+                              stroke="#0b1120"
+                              strokeWidth={2}
+                            >
+                              {severityChartData.chartData.map((entry, index) => (
+                                <Cell key={`cell-sev-${index}`} fill={entry.color} />
+                              ))}
+                            </Pie>
+                            <RechartsTooltip
+                              content={
+                                <CyberDonutTooltip
+                                  total={severityChartData.total}
+                                  unit="findings"
+                                />
+                              }
+                            />
+                          </PieChart>
+                        </ResponsiveContainer>
+                        <div className="donut-chart-center">
+                          <span className="donut-center-val">{severityChartData.total}</span>
+                          <span className="donut-center-label">Findings</span>
+                        </div>
+                      </div>
+
+                      <div className="chart-legend-grid single-col">
+                        {severityChartData.allRows.map((row) => {
+                          const pct =
+                            severityChartData.total > 0
+                              ? ((row.value / severityChartData.total) * 100).toFixed(1)
+                              : '0.0';
+                          return (
+                            <div key={row.name} className="chart-legend-item">
+                              <div className="chart-legend-left">
+                                <span className="chart-legend-dot" style={{ backgroundColor: row.color }} />
+                                <span className="chart-legend-name">{row.name}</span>
+                              </div>
+                              <div className="chart-legend-right">
+                                <span className="chart-legend-count">{row.value}</span>
+                                <span className="chart-legend-pct">({pct}%)</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Chart 2: STRIDE Threat Distribution */}
+                  <div className="analytics-card">
+                    <div className="analytics-card-head">
+                      <div className="analytics-card-title-wrap">
+                        <div className="analytics-icon-badge purple">
+                          <AlertTriangle style={{ width: 16, height: 16 }} />
+                        </div>
+                        <div>
+                          <div className="analytics-card-title">STRIDE Threat Distribution</div>
+                          <div className="analytics-card-sub">Categorized by STRIDE threat model vectors</div>
+                        </div>
+                      </div>
+                      <span
+                        className="analytics-metric-badge"
+                        style={{
+                          background: 'rgba(168,85,247,0.15)',
+                          color: '#c084fc',
+                          border: '1px solid rgba(168,85,247,0.3)',
+                        }}
+                      >
+                        {strideChartData.total} Threats Total
+                      </span>
+                    </div>
+
+                    <div className="chart-content-row">
+                      <div className="donut-chart-container">
+                        <ResponsiveContainer width="100%" height={170}>
+                          <PieChart>
+                            <Pie
+                              data={strideChartData.chartData}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={50}
+                              outerRadius={75}
+                              paddingAngle={4}
+                              dataKey="value"
+                              stroke="#0b1120"
+                              strokeWidth={2}
+                            >
+                              {strideChartData.chartData.map((entry, index) => (
+                                <Cell key={`cell-stride-${index}`} fill={entry.color} />
+                              ))}
+                            </Pie>
+                            <RechartsTooltip
+                              content={
+                                <CyberDonutTooltip
+                                  total={strideChartData.total}
+                                  unit="threats"
+                                />
+                              }
+                            />
+                          </PieChart>
+                        </ResponsiveContainer>
+                        <div className="donut-chart-center">
+                          <span className="donut-center-val">{strideChartData.total}</span>
+                          <span className="donut-center-label">STRIDE</span>
+                        </div>
+                      </div>
+
+                      <div className="chart-legend-grid">
+                        {strideChartData.allRows.map((row) => {
+                          const pct =
+                            strideChartData.total > 0
+                              ? ((row.value / strideChartData.total) * 100).toFixed(1)
+                              : '0.0';
+                          return (
+                            <div key={row.name} className="chart-legend-item">
+                              <div className="chart-legend-left">
+                                <span className="chart-legend-dot" style={{ backgroundColor: row.color }} />
+                                <span className="chart-legend-name" title={row.name}>
+                                  {row.name}
+                                </span>
+                              </div>
+                              <div className="chart-legend-right">
+                                <span className="chart-legend-count">{row.value}</span>
+                                <span className="chart-legend-pct">({pct}%)</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Chart 3: Interface & Attack Surface Protocol Distribution */}
+                  <div className="analytics-card">
+                    <div className="analytics-card-head">
+                      <div className="analytics-card-title-wrap">
+                        <div className="analytics-icon-badge cyan">
+                          <Network style={{ width: 16, height: 16 }} />
+                        </div>
+                        <div>
+                          <div className="analytics-card-title">Interface Protocol Distribution</div>
+                          <div className="analytics-card-sub">Active bus communications and radio link protocols</div>
+                        </div>
+                      </div>
+                      <span
+                        className="analytics-metric-badge"
+                        style={{
+                          background: 'rgba(6,182,212,0.15)',
+                          color: '#22d3ee',
+                          border: '1px solid rgba(6,182,212,0.3)',
+                        }}
+                      >
+                        {interfaceChartData.totalIfaces} Links Analyzed
+                      </span>
+                    </div>
+
+                    <div className="chart-content-row">
+                      <div className="donut-chart-container">
+                        <ResponsiveContainer width="100%" height={170}>
+                          <PieChart>
+                            <Pie
+                              data={interfaceChartData.chartData}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={50}
+                              outerRadius={75}
+                              paddingAngle={4}
+                              dataKey="value"
+                              stroke="#0b1120"
+                              strokeWidth={2}
+                            >
+                              {interfaceChartData.chartData.map((entry, index) => (
+                                <Cell key={`cell-iface-${index}`} fill={entry.color} />
+                              ))}
+                            </Pie>
+                            <RechartsTooltip
+                              content={
+                                <CyberDonutTooltip
+                                  total={interfaceChartData.totalIfaces}
+                                  unit="interfaces"
+                                />
+                              }
+                            />
+                          </PieChart>
+                        </ResponsiveContainer>
+                        <div className="donut-chart-center">
+                          <span className="donut-center-val">{interfaceChartData.totalIfaces}</span>
+                          <span className="donut-center-label">Interfaces</span>
+                        </div>
+                      </div>
+
+                      <div className="chart-legend-grid">
+                        {interfaceChartData.allRows.map((row) => {
+                          const pct =
+                            interfaceChartData.totalIfaces > 0
+                              ? ((row.value / interfaceChartData.totalIfaces) * 100).toFixed(1)
+                              : '0.0';
+                          return (
+                            <div key={row.name} className="chart-legend-item">
+                              <div className="chart-legend-left">
+                                <span className="chart-legend-dot" style={{ backgroundColor: row.color }} />
+                                <span className="chart-legend-name">{row.name}</span>
+                              </div>
+                              <div className="chart-legend-right">
+                                <span className="chart-legend-count">{row.value}</span>
+                                <span className="chart-legend-pct">({pct}%)</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Attack Surface Exposure Sub-strip */}
+                    <div className="surface-exposure-strip">
+                      <span
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 600,
+                          color: 'var(--text-dim)',
+                          textTransform: 'uppercase',
+                        }}
+                      >
+                        Attack Surface Exposure ({interfaceChartData.totalSurfaces} Total):
+                      </span>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {Object.entries(interfaceChartData.surfaceTypeCounts).map(([type, count]) => (
+                          <span key={type} className="surface-exposure-tag">
+                            <span>{type}:</span>
+                            <strong style={{ color: '#fff' }}>{count}</strong>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Chart 4: Architecture Evolution (V1 vs V2 Comparison) */}
+                  <div className="analytics-card">
+                    <div className="analytics-card-head">
+                      <div className="analytics-card-title-wrap">
+                        <div className="analytics-icon-badge emerald">
+                          <GitCompare style={{ width: 16, height: 16 }} />
+                        </div>
+                        <div>
+                          <div className="analytics-card-title">V1 Baseline vs V2 Target Comparison</div>
+                          <div className="analytics-card-sub">Delta visualization across interfaces, surfaces & threats</div>
+                        </div>
+                      </div>
+                      {comparisonChartData.hasDelta ? (
+                        <span className="delta-pill positive">
+                          <TrendingUp style={{ width: 11, height: 11 }} />
+                          Architecture Delta Active
+                        </span>
+                      ) : (
+                        <span className="delta-pill neutral">
+                          Baseline Synchronized
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="comparison-chart-container">
+                      <ResponsiveContainer width="100%" height={180}>
+                        <BarChart
+                          data={comparisonChartData.data}
+                          margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                          <XAxis
+                            dataKey="metric"
+                            stroke="#64748b"
+                            fontSize={11}
+                            tickLine={false}
+                          />
+                          <YAxis
+                            stroke="#64748b"
+                            fontSize={11}
+                            tickLine={false}
+                            allowDecimals={false}
+                          />
+                          <RechartsTooltip content={<CyberBarTooltip />} />
+                          <RechartsLegend
+                            verticalAlign="top"
+                            align="right"
+                            wrapperStyle={{ paddingBottom: 6, fontSize: 11 }}
+                          />
+                          <Bar
+                            name="V1 Baseline"
+                            dataKey="v1"
+                            fill="#38bdf8"
+                            radius={[4, 4, 0, 0]}
+                            maxBarSize={32}
+                          />
+                          <Bar
+                            name="V2 Target"
+                            dataKey="v2"
+                            fill="#10b981"
+                            radius={[4, 4, 0, 0]}
+                            maxBarSize={32}
+                          />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    <div className="comparison-delta-pills">
+                      {comparisonChartData.data.map((item) => {
+                        const delta = item.delta;
+                        return (
+                          <span
+                            key={item.metric}
+                            className={`delta-pill ${delta > 0 ? 'positive' : 'neutral'}`}
+                          >
+                            {item.metric}: {delta > 0 ? `+${delta}` : '0'}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </section>
+            )}
 
             {/* NEW SECTION: ARCHITECTURE CHANGE DETECTION & REVALIDATION */}
             {(activeTab === 'all' || activeTab === 'comparison') && (
