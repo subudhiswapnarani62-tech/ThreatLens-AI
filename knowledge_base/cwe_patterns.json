@@ -1,0 +1,42 @@
+﻿[
+  {
+    "cwe": "CWE-306",
+    "name": "Missing Authentication for Critical Function",
+    "stride": ["Spoofing", "Elevation of Privilege"],
+    "protocols": ["Bluetooth", "Wi-Fi", "Ethernet", "CAN", "Diagnostic"],
+    "severity": "High",
+    "recommendation": "Implement strong authentication and authorization for security-critical functions."
+  },
+  {
+    "cwe": "CWE-319",
+    "name": "Cleartext Transmission of Sensitive Information",
+    "stride": ["Information Disclosure"],
+    "protocols": ["Bluetooth", "Wi-Fi", "Ethernet"],
+    "severity": "High",
+    "recommendation": "Use authenticated encryption and protect sensitive data in transit."
+  },
+  {
+    "cwe": "CWE-400",
+    "name": "Uncontrolled Resource Consumption",
+    "stride": ["Denial of Service"],
+    "protocols": ["Bluetooth", "Wi-Fi", "Ethernet", "CAN"],
+    "severity": "Medium",
+    "recommendation": "Apply rate limiting, resource controls, input validation, and safe failure handling."
+  },
+  {
+    "cwe": "CWE-20",
+    "name": "Improper Input Validation",
+    "stride": ["Tampering", "Denial of Service"],
+    "protocols": ["Bluetooth", "Wi-Fi", "Ethernet", "CAN", "Diagnostic", "USB"],
+    "severity": "Medium",
+    "recommendation": "Validate message format, length, type, range, and protocol state before processing input."
+  },
+  {
+    "cwe": "CWE-862",
+    "name": "Missing Authorization",
+    "stride": ["Elevation of Privilege"],
+    "protocols": ["Bluetooth", "Wi-Fi", "Ethernet", "CAN", "Diagnostic"],
+    "severity": "High",
+    "recommendation": "Enforce authorization checks for privileged operations and security-critical commands."
+  }
+]

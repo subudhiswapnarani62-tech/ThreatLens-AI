@@ -1,0 +1,47 @@
+{
+  "system": "Connected Vehicle",
+  "components": [
+    {
+      "id": "gateway",
+      "name": "Gateway ECU",
+      "type": "ECU"
+    },
+    {
+      "id": "engine",
+      "name": "Engine ECU",
+      "type": "ECU"
+    },
+    {
+      "id": "brake",
+      "name": "Brake ECU",
+      "type": "ECU"
+    },
+    {
+      "id": "infotainment",
+      "name": "Infotainment ECU",
+      "type": "ECU"
+    }
+  ],
+  "interfaces": [
+    {
+      "source": "gateway",
+      "target": "engine",
+      "protocol": "CAN"
+    },
+    {
+      "source": "gateway",
+      "target": "brake",
+      "protocol": "CAN"
+    },
+    {
+      "source": "gateway",
+      "target": "infotainment",
+      "protocol": "Ethernet"
+    },
+    {
+      "source": "infotainment",
+      "target": "external",
+      "protocol": "Bluetooth"
+    }
+  ]
+}
