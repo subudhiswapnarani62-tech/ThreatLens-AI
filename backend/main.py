@@ -1,7 +1,9 @@
 import json
+import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,20 +37,62 @@ app = FastAPI(
     version="1.1.0",
 )
 
-# CORS configuration for React/Vite frontend
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:8001",
-        "http://127.0.0.1:8001",
-    ],
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+DEFAULT_DEV_ORIGINS: List[str] = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8001",
+    "http://127.0.0.1:8001",
+]
+DEV_ORIGIN_REGEX: str = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+
+
+def parse_cors_origins(raw_origins: Optional[str]) -> Tuple[List[str], Optional[str]]:
+    """
+    Parse and validate allowed CORS origins.
+    - If CORS_ORIGINS is not supplied, preserves localhost development origins.
+    - If supplied, parses comma-separated HTTPS production origins safely.
+    - Rejects wildcards ('*') in production and discards malformed entries.
+    """
+    if not raw_origins or not raw_origins.strip():
+        return list(DEFAULT_DEV_ORIGINS), DEV_ORIGIN_REGEX
+
+    allowed: List[str] = []
+    for item in raw_origins.split(","):
+        origin = item.strip().rstrip("/")
+        # Reject empty, wildcards, or invalid entries
+        if not origin or origin == "*":
+            continue
+        try:
+            parsed = urlparse(origin)
+            # Only allow secure HTTPS origins in production
+            if parsed.scheme == "https" and parsed.netloc:
+                clean_origin = f"https://{parsed.netloc}"
+                if clean_origin not in allowed:
+                    allowed.append(clean_origin)
+        except Exception:
+            continue
+
+    if not allowed:
+        # Fall back safely to dev origins if production config had no valid HTTPS origins
+        return list(DEFAULT_DEV_ORIGINS), DEV_ORIGIN_REGEX
+
+    return allowed, None
+
+
+# CORS configuration for React/Vite frontend (supporting production CORS_ORIGINS)
+cors_origins_env = os.getenv("CORS_ORIGINS")
+allowed_origins, origin_regex = parse_cors_origins(cors_origins_env)
+
+cors_kwargs: Dict[str, Any] = {
+    "allow_origins": allowed_origins,
+    "allow_credentials": True,
+    "allow_methods": ["*"],
+    "allow_headers": ["*"],
+}
+if origin_regex is not None:
+    cors_kwargs["allow_origin_regex"] = origin_regex
+
+app.add_middleware(CORSMiddleware, **cors_kwargs)
 
 
 class Component(BaseModel):
@@ -273,4 +317,6 @@ def run_tests(request: ExecuteTestsRequest):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8001)
+    port = int(os.getenv("PORT", "8001"))
+    host = os.getenv("HOST", "127.0.0.1")
+    uvicorn.run(app, host=host, port=port)

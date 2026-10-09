@@ -95,22 +95,84 @@ const CyberBarTooltip = ({ active, payload, label }) => {
   return null;
 };
 
-const DEFAULT_API_URL = 'http://127.0.0.1:8001';
-const API_BASE_URL =
-  import.meta.env.VITE_API_URL !== undefined && import.meta.env.VITE_API_URL !== ''
-    ? import.meta.env.VITE_API_URL
-    : DEFAULT_API_URL;
+const IS_PROD = Boolean(import.meta.env.PROD);
+const RAW_VITE_API_URL = (import.meta.env.VITE_API_URL || '').trim();
+const LOCAL_DEV_API_URL = 'http://127.0.0.1:8001';
 
-// Dynamically extract the configured API port for UI indicators
-const getTargetApiPort = () => {
+// Validate and normalize API configuration for local dev and cloud production
+const getApiConfig = () => {
+  if (IS_PROD) {
+    if (!RAW_VITE_API_URL) {
+      return {
+        baseUrl: '',
+        isValid: false,
+        error:
+          'Production API configuration missing: VITE_API_URL is not set. Please configure VITE_API_URL with your deployed HTTPS backend URL (e.g. https://your-backend.onrender.com) during build.',
+        displayLabel: 'CONFIG ERROR (VITE_API_URL missing)',
+      };
+    }
+
+    try {
+      const parsed = new URL(RAW_VITE_API_URL);
+      if (parsed.protocol !== 'https:') {
+        return {
+          baseUrl: '',
+          isValid: false,
+          error: `Production API security error: VITE_API_URL must use HTTPS to prevent mixed-content blocking. Found: "${RAW_VITE_API_URL}".`,
+          displayLabel: 'CONFIG ERROR (HTTPS required)',
+        };
+      }
+      // Valid production HTTPS URL; strip any trailing slashes
+      const cleanBase =
+        parsed.origin +
+        (parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/, ''));
+      return {
+        baseUrl: cleanBase,
+        isValid: true,
+        error: null,
+        displayLabel: parsed.hostname,
+      };
+    } catch {
+      return {
+        baseUrl: '',
+        isValid: false,
+        error: `Production API configuration error: VITE_API_URL is not a valid URL. Found: "${RAW_VITE_API_URL}".`,
+        displayLabel: 'CONFIG ERROR (Invalid URL)',
+      };
+    }
+  }
+
+  // Local development mode: allow VITE_API_URL override or default to local port 8001
+  const devBase = RAW_VITE_API_URL || LOCAL_DEV_API_URL;
   try {
-    const url = new URL(API_BASE_URL, window.location.href);
-    return url.port || (url.protocol === 'https:' ? '443' : '80');
+    const parsed = new URL(devBase, window.location.origin);
+    const cleanBase = devBase.replace(/\/+$/, '');
+    const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80');
+    return {
+      baseUrl: cleanBase,
+      isValid: true,
+      error: null,
+      displayLabel: port || '8001',
+    };
   } catch {
-    return '8001';
+    return {
+      baseUrl: LOCAL_DEV_API_URL,
+      isValid: true,
+      error: null,
+      displayLabel: '8001',
+    };
   }
 };
-const CONFIGURED_API_PORT = getTargetApiPort();
+
+const API_CONFIG = getApiConfig();
+const CONFIGURED_API_PORT = API_CONFIG.displayLabel;
+
+// Safe path joining helper: ensures no accidental double slashes
+const buildApiUrl = (endpoint) => {
+  const base = API_CONFIG.baseUrl.replace(/\/+$/, '');
+  const path = endpoint.replace(/^\/+/, '');
+  return `${base}/${path}`;
+};
 
 export default function App() {
   const [loading, setLoading] = useState(true);
@@ -159,15 +221,23 @@ export default function App() {
   const [expandedLogTestId, setExpandedLogTestId] = useState(null);
   const [testExecutionError, setTestExecutionError] = useState(null);
 
-  // Helper: call API with fallback to direct localhost:8001
+  // Helper: call API with safe path joining and development fallback
   const fetchWithFallback = async (endpoint, options = {}) => {
+    if (IS_PROD && !API_CONFIG.isValid) {
+      throw new Error(API_CONFIG.error || 'Production API URL configuration is invalid.');
+    }
+
+    const targetUrl = buildApiUrl(endpoint);
     try {
-      const res = await fetch(`${API_BASE_URL}${endpoint}`, options);
+      const res = await fetch(targetUrl, options);
       return res;
     } catch (err) {
-      if (API_BASE_URL !== DEFAULT_API_URL) {
-        return await fetch(`${DEFAULT_API_URL}${endpoint}`, options);
+      // In local development only, attempt fallback to local 8001 if a custom dev URL was set and failed
+      if (!IS_PROD && API_CONFIG.baseUrl !== LOCAL_DEV_API_URL) {
+        const fallbackUrl = `${LOCAL_DEV_API_URL}/${endpoint.replace(/^\/+/, '')}`;
+        return await fetch(fallbackUrl, options);
       }
+      // In production, do NOT fall back to localhost; throw real network/CORS error
       throw err;
     }
   };
@@ -177,6 +247,15 @@ export default function App() {
     setLoading(true);
     setError(null);
     setHealthStatus('checking');
+
+    // In production with invalid or missing API URL, fail fast with informative message
+    if (IS_PROD && !API_CONFIG.isValid) {
+      setError(API_CONFIG.error);
+      setHealthStatus('config_error');
+      setLoading(false);
+      return;
+    }
+
     try {
       // 1. Health check
       try {
@@ -791,6 +870,8 @@ export default function App() {
                     ? 'checking'
                     : healthStatus === 'degraded'
                     ? 'degraded'
+                    : healthStatus === 'config_error'
+                    ? 'degraded'
                     : 'offline'
                 }`}
               />
@@ -802,19 +883,21 @@ export default function App() {
                       ? 'var(--accent-emerald)'
                       : healthStatus === 'checking'
                       ? 'var(--risk-medium)'
-                      : healthStatus === 'degraded'
+                      : healthStatus === 'degraded' || healthStatus === 'config_error'
                       ? 'var(--risk-high)'
                       : 'var(--risk-critical)',
                   fontWeight: 600,
                 }}
               >
-                {healthStatus === 'connected'
-                  ? `ONLINE (${CONFIGURED_API_PORT})`
+                {healthStatus === 'config_error'
+                  ? API_CONFIG.displayLabel
+                  : healthStatus === 'connected'
+                  ? `ONLINE (${API_CONFIG.displayLabel})`
                   : healthStatus === 'checking'
-                  ? `CHECKING (${CONFIGURED_API_PORT})`
+                  ? `CHECKING (${API_CONFIG.displayLabel})`
                   : healthStatus === 'degraded'
-                  ? `DEGRADED (${CONFIGURED_API_PORT})`
-                  : `OFFLINE (${CONFIGURED_API_PORT})`}
+                  ? `DEGRADED (${API_CONFIG.displayLabel})`
+                  : `OFFLINE (${API_CONFIG.displayLabel})`}
               </span>
             </div>
 
@@ -946,19 +1029,27 @@ export default function App() {
             <ShieldAlert style={{ width: 24, height: 24, color: 'var(--risk-critical)', flexShrink: 0 }} />
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: '#fca5a5' }}>
-                Backend Communication Failure
+                {healthStatus === 'config_error' ? 'Configuration Notice' : 'Backend Communication Failure'}
               </div>
               <p style={{ fontSize: 12, color: '#fecaca', marginTop: 4 }}>{error}</p>
               <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
-                <button
-                  onClick={runBaselineAnalysis}
-                  className="reanalyze-button"
-                  style={{ background: 'var(--risk-critical)', color: '#fff', borderColor: 'transparent' }}
-                >
-                  Retry Connection
-                </button>
+                {healthStatus !== 'config_error' && (
+                  <button
+                    onClick={runBaselineAnalysis}
+                    className="reanalyze-button"
+                    style={{ background: 'var(--risk-critical)', color: '#fff', borderColor: 'transparent' }}
+                  >
+                    Retry Connection
+                  </button>
+                )}
                 <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                  Start backend with: <code style={{ color: 'var(--accent-cyan)' }}>python backend/main.py</code> (Port {CONFIGURED_API_PORT})
+                  {IS_PROD ? (
+                    'Set VITE_API_URL to your deployed HTTPS backend URL in your hosting environment.'
+                  ) : (
+                    <>
+                      Start backend with: <code style={{ color: 'var(--accent-cyan)' }}>python backend/main.py</code> (Port {API_CONFIG.displayLabel})
+                    </>
+                  )}
                 </span>
               </div>
             </div>
